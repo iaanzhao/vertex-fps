@@ -310,6 +310,62 @@ canvas {
   font-size: 0.9rem;
 }
 
+.multiplayer-panel {
+  width: min(420px, 92vw);
+  margin-bottom: 1.25rem;
+}
+
+.multiplayer-panel input {
+  pointer-events: auto;
+  width: 100%;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  border: 2px solid rgba(255, 109, 0, 0.45);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.multiplayer-panel input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 600;
+}
+
+#mp-status {
+  min-height: 1.2rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #81c784;
+  margin-bottom: 8px;
+}
+
+#mp-status.error {
+  color: #ef5350;
+}
+
+.room-info {
+  font-size: 0.75rem;
+  opacity: 0.75;
+  word-break: break-all;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.menu-buttons-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.menu-buttons-row button {
+  width: 100%;
+  padding: 14px 24px;
+  font-size: 0.95rem;
+}
+
 .controls-hint {
   opacity: 0.5;
   font-size: 0.8rem;

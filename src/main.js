@@ -4,11 +4,16 @@ import { createPlayer } from './player.js';
 import { createEnemySystem } from './enemies.js';
 import { createGun } from './gun.js';
 import { mat } from './lowpoly.js';
+import { getWsUrl, setWsUrl, validateWsUrl, defaultWsUrl, local } from './config.js';
+import { createNetClient } from './net.js';
+import { createRemotePlayerSystem } from './remotePlayers.js';
 
 const menu = document.getElementById('menu');
 const pauseMenu = document.getElementById('pause-menu');
 const gameOverEl = document.getElementById('game-over');
-const playBtn = document.getElementById('play-btn');
+const soloBtn = document.getElementById('solo-btn');
+const hostBtn = document.getElementById('host-btn');
+const joinBtn = document.getElementById('join-btn');
 const resumeBtn = document.getElementById('resume-btn');
 const exitBtn = document.getElementById('exit-btn');
 const restartBtn = document.getElementById('restart-btn');
@@ -26,6 +31,13 @@ const resultText = document.getElementById('result-text');
 const hitMarker = document.getElementById('hit-marker');
 const crosshair = document.getElementById('crosshair');
 const respawnOverlay = document.getElementById('respawn-overlay');
+const modeBadge = document.getElementById('mode-badge');
+const scoreboardLabel = document.getElementById('scoreboard-label');
+const playerNameInput = document.getElementById('player-name');
+const serverUrlInput = document.getElementById('server-url');
+const roomCodeInput = document.getElementById('room-code');
+const mpStatus = document.getElementById('mp-status');
+const roomInfo = document.getElementById('room-info');
 
 const HIP_FOV = 80;
 const MOUSE_SENS = 0.0022;
@@ -33,7 +45,12 @@ const ADS_SENS = 0.001;
 const MATCH_TIME = 180;
 const KILL_LIMIT = 20;
 const RESPAWN_TIME = 2.5;
+const STATE_SEND_INTERVAL = 0.05;
 
+let gameMode = 'solo';
+let net = null;
+let myPlayerId = null;
+let stateSendTimer = 0;
 let playing = false;
 let paused = false;
 let aiming = false;
@@ -66,18 +83,35 @@ const camera = new THREE.PerspectiveCamera(
   HIP_FOV,
   window.innerWidth / window.innerHeight,
   0.1,
-  150
+  150,
 );
 camera.position.set(0, 1.7, 0);
 
 const player = createPlayer(camera, colliders, spawnPoints);
 const enemies = createEnemySystem(scene, () => player.getPosition());
+const remotePlayers = createRemotePlayerSystem(scene);
 const gun = createGun(camera);
 scene.add(camera);
 
 const raycaster = new THREE.Raycaster();
 const bullets = [];
 const blockParticles = [];
+
+serverUrlInput.value = getWsUrl();
+serverUrlInput.placeholder = defaultWsUrl();
+
+const params = new URLSearchParams(location.search);
+if (params.get('room')) roomCodeInput.value = params.get('room').toUpperCase();
+
+function readServerUrl() {
+  const url = serverUrlInput.value.trim() || defaultWsUrl();
+  setWsUrl(url);
+  return url;
+}
+
+function isMultiplayer() {
+  return gameMode === 'multiplayer';
+}
 
 function formatTime(sec) {
   const m = Math.floor(sec / 60);
@@ -89,9 +123,23 @@ function updateHUD() {
   healthFill.style.width = `${Math.max(0, health)}%`;
   healthNum.textContent = Math.max(0, Math.ceil(health));
   killsEl.textContent = kills;
-  botKillsEl.textContent = botKills;
+  if (isMultiplayer()) {
+    botKillsEl.textContent = remotePlayers ? '—' : '0';
+  } else {
+    botKillsEl.textContent = botKills;
+  }
   kdVal.textContent = `${kills}/${deaths}`;
   timerEl.textContent = formatTime(matchTime);
+}
+
+function setMpStatus(text, isError = false) {
+  mpStatus.textContent = text;
+  mpStatus.classList.toggle('error', isError);
+}
+
+function setRoomInfo(text) {
+  roomInfo.textContent = text;
+  roomInfo.classList.toggle('hidden', !text);
 }
 
 function addKillFeed(text, headshot = false) {
@@ -129,25 +177,28 @@ function spawnHitBurst(pos, color) {
   }
 }
 
+function currentWeaponId() {
+  const active = document.querySelector('.weapon-slot.active');
+  return active?.dataset.weapon || 'rifle';
+}
+
 function tryShoot() {
   if (!isGameplayActive() || !gun.canShoot()) return;
 
   const weapon = gun.shoot();
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
 
-  const allMeshes = [...getDestructibleMeshes(), ...enemies.getAllHitMeshes()];
-  const hits = raycaster.intersectObjects(allMeshes, false);
+  const targets = isMultiplayer() ? getDestructibleMeshes() : [...getDestructibleMeshes(), ...enemies.getAllHitMeshes()];
+  const hits = raycaster.intersectObjects(targets, false);
 
   let didHit = false;
   if (hits.length > 0) {
     const hit = hits[0];
-    const isBlock = hit.object.userData.destructible;
-
-    if (isBlock) {
+    if (hit.object.userData.destructible) {
       damageDestructible(hit.object, weapon.damage);
       spawnHitBurst(hit.point, 0xff6d00);
       didHit = true;
-    } else {
+    } else if (!isMultiplayer()) {
       const result = enemies.damageAtMesh(hit.object, weapon.damage);
       if (result?.name && !result.wounded) {
         kills++;
@@ -164,6 +215,10 @@ function tryShoot() {
     }
   }
 
+  if (isMultiplayer() && net?.connected) {
+    net.send({ type: 'shoot', weapon: currentWeaponId() });
+  }
+
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
   const bullet = new THREE.Mesh(
@@ -176,8 +231,16 @@ function tryShoot() {
 }
 
 function damagePlayer(amount) {
-  if (!isGameplayActive()) return;
+  if (!isGameplayActive() || isMultiplayer()) return;
   health -= amount;
+  updateHUD();
+  document.body.style.boxShadow = 'inset 0 0 100px rgba(229, 57, 53, 0.45)';
+  setTimeout(() => { document.body.style.boxShadow = ''; }, 120);
+  if (health <= 0) playerDied();
+}
+
+function applyServerDamage(amount, newHealth) {
+  health = newHealth;
   updateHUD();
   document.body.style.boxShadow = 'inset 0 0 100px rgba(229, 57, 53, 0.45)';
   setTimeout(() => { document.body.style.boxShadow = ''; }, 120);
@@ -186,26 +249,39 @@ function damagePlayer(amount) {
 
 function playerDied() {
   isDead = true;
-  deaths++;
-  botKills++;
+  if (!isMultiplayer()) {
+    deaths++;
+    botKills++;
+  }
   setAiming(false);
   firing = false;
-  addKillFeed('You were eliminated', false);
+  if (!isMultiplayer()) addKillFeed('You were eliminated', false);
   updateHUD();
   respawnOverlay.classList.remove('hidden');
-  respawnTimer = RESPAWN_TIME;
+  respawnTimer = isMultiplayer() ? RESPAWN_TIME : RESPAWN_TIME;
 }
 
-function endMatch(victory) {
+function endMatch(victory, winnerName) {
   playing = false;
   paused = false;
   setAiming(false);
   document.exitPointerLock?.();
-  resultText.textContent = victory ? 'VICTORY!' : 'DEFEAT';
-  resultText.style.color = victory ? '#42a5f5' : '#ef5350';
+  if (isMultiplayer()) {
+    resultText.textContent = winnerName ? `${winnerName} WINS` : 'MATCH OVER';
+    resultText.style.color = '#42a5f5';
+  } else {
+    resultText.textContent = victory ? 'VICTORY!' : 'DEFEAT';
+    resultText.style.color = victory ? '#42a5f5' : '#ef5350';
+  }
   finalKd.textContent = `${kills}/${deaths}`;
   gameOverEl.classList.remove('hidden');
   pauseMenu.classList.add('hidden');
+}
+
+function disconnectNet() {
+  net?.close();
+  net = null;
+  myPlayerId = null;
 }
 
 function exitToMenu() {
@@ -214,11 +290,17 @@ function exitToMenu() {
   isDead = false;
   hadPointerLock = false;
   setAiming(false);
+  disconnectNet();
+  remotePlayers.clear();
   document.exitPointerLock?.();
   pauseMenu.classList.add('hidden');
   gameOverEl.classList.add('hidden');
   respawnOverlay.classList.add('hidden');
   menu.classList.remove('hidden');
+  modeBadge.textContent = 'TEAM DEATHMATCH';
+  scoreboardLabel.textContent = 'BOTS';
+  setRoomInfo('');
+  setMpStatus('');
   currentFov = HIP_FOV;
   camera.fov = HIP_FOV;
   camera.updateProjectionMatrix();
@@ -241,7 +323,8 @@ function closePauseMenu() {
   if (playing && !isDead) renderer.domElement.requestPointerLock();
 }
 
-function startGame() {
+function beginMatch(mode) {
+  gameMode = mode;
   health = 100;
   kills = 0;
   deaths = 0;
@@ -253,20 +336,219 @@ function startGame() {
   paused = false;
   isDead = false;
   respawnTimer = 0;
+  stateSendTimer = 0;
   setAiming(false);
   killFeed.innerHTML = '';
+
+  if (isMultiplayer()) {
+    modeBadge.textContent = 'FREE FOR ALL';
+    scoreboardLabel.textContent = 'PLAYERS';
+    enemies.clear();
+  } else {
+    modeBadge.textContent = 'TEAM DEATHMATCH';
+    scoreboardLabel.textContent = 'BOTS';
+    remotePlayers.clear();
+    disconnectNet();
+    player.reset();
+    enemies.reset();
+  }
+
   menu.classList.add('hidden');
   gameOverEl.classList.add('hidden');
   pauseMenu.classList.add('hidden');
   respawnOverlay.classList.add('hidden');
-  player.reset();
-  enemies.reset();
   updateHUD();
   currentFov = HIP_FOV;
   camera.fov = HIP_FOV;
   camera.updateProjectionMatrix();
   hadPointerLock = false;
   renderer.domElement.requestPointerLock();
+}
+
+function startSolo() {
+  beginMatch('solo');
+}
+
+function setupNetHandlers(client) {
+  client.on('snapshot', (msg) => {
+    matchTime = msg.matchTime ?? matchTime;
+    remotePlayers.syncFromSnapshot(msg.players, myPlayerId);
+    const me = msg.players.find((p) => p.id === myPlayerId);
+    if (me && !isDead) {
+      kills = me.kills;
+      deaths = me.deaths;
+    }
+    updateHUD();
+  });
+
+  client.on('player_joined', (msg) => {
+    addKillFeed(`${msg.player.name} joined`);
+  });
+
+  client.on('player_left', (msg) => {
+    remotePlayers.remove(msg.id);
+    addKillFeed('Player left');
+  });
+
+  client.on('shot', (msg) => {
+    if (msg.hit) {
+      hitMarker.classList.add('show');
+      setTimeout(() => hitMarker.classList.remove('show'), 90);
+    }
+  });
+
+  client.on('damaged', (msg) => {
+    applyServerDamage(msg.amount, msg.health);
+  });
+
+  client.on('kill', (msg) => {
+    const mine = msg.killerId === myPlayerId;
+    const died = msg.victimId === myPlayerId;
+    if (mine) kills++;
+    if (died) {
+      deaths++;
+      if (!isDead) playerDied();
+    }
+    addKillFeed(`${msg.killerName} eliminated ${msg.victimName}`, msg.headshot);
+    updateHUD();
+  });
+
+  client.on('respawn', (msg) => {
+    if (msg.id === myPlayerId) {
+      isDead = false;
+      health = 100;
+      respawnOverlay.classList.add('hidden');
+      const pos = player.getPosition();
+      pos.set(msg.x, msg.y, msg.z);
+      player.teleport(msg.x, msg.y, msg.z);
+      updateHUD();
+    }
+  });
+
+  client.on('match_end', (msg) => {
+    const me = msg.scores?.find((s) => s.id === myPlayerId);
+    if (me) {
+      kills = me.kills;
+      deaths = me.deaths;
+    }
+    endMatch(false, msg.winnerName);
+  });
+
+  client.on('error', (msg) => {
+    setMpStatus(msg.message, true);
+  });
+
+  client.on('close', () => {
+    if (playing && isMultiplayer()) {
+      addKillFeed('Disconnected from server');
+      openPauseMenu();
+    }
+  });
+}
+
+function serverHint() {
+  if (local) return 'Run npm run dev:all in a terminal first.';
+  return 'Deploy server/ to Render (see README) and use a wss:// URL.';
+}
+
+async function hostOnline() {
+  const name = playerNameInput.value.trim() || 'Player';
+  const url = readServerUrl();
+  const urlError = validateWsUrl(url);
+  if (urlError) {
+    setMpStatus(urlError, true);
+    return;
+  }
+
+  setMpStatus(`Connecting to ${url}…`);
+  hostBtn.disabled = true;
+  joinBtn.disabled = true;
+  soloBtn.disabled = true;
+  try {
+    disconnectNet();
+    const client = createNetClient(url);
+    const { msg } = await client.connectAndJoin({ type: 'create', name });
+    net = client;
+    setupNetHandlers(net);
+    handleWelcome(msg);
+    setMpStatus('');
+  } catch (err) {
+    setMpStatus(`${err.message}. ${serverHint()}`, true);
+  } finally {
+    hostBtn.disabled = false;
+    joinBtn.disabled = false;
+    soloBtn.disabled = false;
+  }
+}
+
+async function joinOnline() {
+  const name = playerNameInput.value.trim() || 'Player';
+  const room = roomCodeInput.value.trim().toUpperCase();
+  const url = readServerUrl();
+  const urlError = validateWsUrl(url);
+  if (urlError) {
+    setMpStatus(urlError, true);
+    return;
+  }
+  if (!room) {
+    setMpStatus('Enter a room code', true);
+    return;
+  }
+
+  setMpStatus(`Looking for room ${room}…`);
+  hostBtn.disabled = true;
+  joinBtn.disabled = true;
+  soloBtn.disabled = true;
+  try {
+    disconnectNet();
+    const client = createNetClient(url);
+    const { msg } = await client.connectAndJoin({ type: 'join', name, room });
+    net = client;
+    setupNetHandlers(net);
+    handleWelcome(msg);
+    setMpStatus('');
+  } catch (err) {
+    const hint = err.message === 'Room not found'
+      ? `Check the code and make sure the host is still online on the same server (${url}).`
+      : serverHint();
+    setMpStatus(`${err.message}. ${hint}`, true);
+  } finally {
+    hostBtn.disabled = false;
+    joinBtn.disabled = false;
+    soloBtn.disabled = false;
+  }
+}
+
+function handleWelcome(msg) {
+  myPlayerId = msg.id;
+  roomCodeInput.value = msg.room;
+  const share = `${location.origin}${location.pathname}?room=${msg.room}`;
+  setRoomInfo(`Room ${msg.room} · Share: ${share}`);
+  remotePlayers.syncFromSnapshot(msg.players, myPlayerId);
+  matchTime = msg.matchTime ?? MATCH_TIME;
+  beginMatch('multiplayer');
+  player.reset();
+  const me = msg.players.find((p) => p.id === myPlayerId);
+  if (me) {
+    kills = me.kills;
+    deaths = me.deaths;
+    health = me.health;
+    updateHUD();
+  }
+}
+
+function sendPlayerState() {
+  if (!net?.connected || !isGameplayActive()) return;
+  const pos = player.getPosition();
+  net.send({
+    type: 'state',
+    x: pos.x,
+    y: pos.y,
+    z: pos.z,
+    yaw,
+    pitch,
+    weapon: currentWeaponId(),
+  });
 }
 
 document.addEventListener('mousemove', (e) => {
@@ -317,8 +599,13 @@ document.addEventListener('pointerlockchange', () => {
   }
 });
 
-playBtn.addEventListener('click', startGame);
-restartBtn.addEventListener('click', startGame);
+soloBtn.addEventListener('click', startSolo);
+hostBtn.addEventListener('click', hostOnline);
+joinBtn.addEventListener('click', joinOnline);
+restartBtn.addEventListener('click', () => {
+  if (isMultiplayer()) exitToMenu();
+  else startSolo();
+});
 resumeBtn.addEventListener('click', closePauseMenu);
 exitBtn.addEventListener('click', exitToMenu);
 
@@ -335,7 +622,7 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   if (playing && !paused) {
-    if (isDead) {
+    if (isDead && !isMultiplayer()) {
       respawnTimer -= dt;
       respawnOverlay.textContent = `RESPAWNING ${Math.ceil(respawnTimer)}`;
       if (respawnTimer <= 0) {
@@ -345,12 +632,17 @@ function animate() {
         player.respawn();
         updateHUD();
       }
+    } else if (isDead && isMultiplayer()) {
+      respawnTimer -= dt;
+      respawnOverlay.textContent = `RESPAWNING ${Math.ceil(respawnTimer)}`;
     } else {
-      matchTime -= dt;
-      if (matchTime <= 0) {
-        matchTime = 0;
-        endMatch(kills >= botKills);
-        updateHUD();
+      if (!isMultiplayer()) {
+        matchTime -= dt;
+        if (matchTime <= 0) {
+          matchTime = 0;
+          endMatch(kills >= botKills);
+          updateHUD();
+        }
       }
 
       if (firing && isGameplayActive()) tryShoot();
@@ -365,7 +657,15 @@ function animate() {
       camera.rotation.x = pitch;
 
       player.update(dt, yaw);
-      enemies.update(dt, damagePlayer);
+      if (!isMultiplayer()) enemies.update(dt, damagePlayer);
+      else remotePlayers.update(dt);
+
+      stateSendTimer += dt;
+      if (stateSendTimer >= STATE_SEND_INTERVAL) {
+        stateSendTimer = 0;
+        sendPlayerState();
+      }
+
       updateDebris(dt);
 
       for (let i = bullets.length - 1; i >= 0; i--) {

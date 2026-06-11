@@ -119,11 +119,15 @@ export function createEnemySystem(scene, getPlayerPos) {
     return enemies.flatMap((e) => e.hitMeshes);
   }
 
-  function reset() {
+  function clear() {
     enemies.forEach((e) => scene.remove(e.mesh));
     enemies.length = 0;
     spawnTimer = 0;
     nameIdx = 0;
+  }
+
+  function reset() {
+    clear();
     for (let i = 0; i < 6; i++) spawnEnemy();
   }
 
@@ -133,6 +137,7 @@ export function createEnemySystem(scene, getPlayerPos) {
     damageAtMesh,
     getAllHitMeshes,
     reset,
+    clear,
     get count() { return enemies.length; },
   };
 }

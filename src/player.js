@@ -130,5 +130,12 @@ export function createPlayer(camera, colliders, spawnPoints) {
     camera.position.copy(position);
   }
 
-  return { update, getPosition, reset, respawn, get sprinting() { return keys.shift; } };
+  function teleport(x, y, z) {
+    position.set(x, y, z);
+    velocity.set(0, 0, 0);
+    onGround = true;
+    camera.position.copy(position);
+  }
+
+  return { update, getPosition, reset, respawn, teleport, get sprinting() { return keys.shift; } };
 }
