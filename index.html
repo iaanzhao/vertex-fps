@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VERTEX — Low Poly FPS</title>
+    <script type="module" crossorigin src="/vertex-fps/assets/index-C_mO0hn6.js"></script>
+    <link rel="stylesheet" crossorigin href="/vertex-fps/assets/index-CzEd6kvC.css">
+  </head>
+  <body>
+    <div id="ui">
+      <div id="top-bar">
+        <div class="mode-badge">TEAM DEATHMATCH</div>
+        <div id="timer">03:00</div>
+        <div id="scoreboard">
+          <span class="team-blue">YOU <b id="kills">0</b></span>
+          <span class="vs">:</span>
+          <span class="team-red">BOTS <b id="bot-kills">0</b></span>
+        </div>
+      </div>
+      <div id="hud-left">
+        <div class="hp-label">HP</div>
+        <div id="health-bar"><div id="health-fill"></div></div>
+        <div id="health-num">100</div>
+      </div>
+      <div id="kd">K/D <span id="kd-val">0/0</span></div>
+      <div id="kill-feed"></div>
+      <div id="crosshair"><div class="ch-ring"></div><div class="ch-dot"></div></div>
+      <div id="hit-marker"></div>
+      <div id="weapon-hud">
+        <div class="weapon-slot active" data-weapon="rifle"><span>1</span>AR-15</div>
+        <div class="weapon-slot" data-weapon="smg"><span>2</span>VECTOR</div>
+        <div class="weapon-slot" data-weapon="sniper"><span>3</span>HAWK</div>
+        <div id="weapon-name">AR-15</div>
+      </div>
+      <div id="respawn-overlay" class="hidden">RESPAWNING...</div>
+    </div>
+
+    <div id="menu">
+      <div class="logo">VER<span>TEX</span></div>
+      <p class="tagline">Low Poly FPS · Browser Edition</p>
+      <div class="mode-card">
+        <h3>TEAM DEATHMATCH</h3>
+        <p>Fight bot squad · Break cover · First to 20 kills</p>
+      </div>
+      <p class="controls-hint">
+        WASD move · Shift sprint · Space jump · LMB shoot · RMB aim · 1-3 weapons · Esc menu
+      </p>
+      <button id="play-btn">ENTER MATCH</button>
+    </div>
+
+    <div id="pause-menu" class="hidden">
+      <h2>PAUSED</h2>
+      <p>K/D: <span id="pause-kd">0/0</span> · Time: <span id="pause-time">03:00</span></p>
+      <div class="menu-buttons">
+        <button id="resume-btn">RESUME</button>
+        <button id="exit-btn" class="btn-secondary">EXIT TO MENU</button>
+      </div>
+    </div>
+
+    <div id="game-over" class="hidden">
+      <h2>MATCH END</h2>
+      <p class="result-line" id="result-text">Victory!</p>
+      <p>Your K/D: <span id="final-kd">0/0</span></p>
+      <button id="restart-btn">PLAY AGAIN</button>
+    </div>
+
+  </body>
+</html>
